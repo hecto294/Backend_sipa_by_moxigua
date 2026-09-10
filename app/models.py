@@ -113,6 +113,11 @@ class Usuario(Base):
     rol_id = Column(BigInteger, ForeignKey("etapa_productiva.roles.id"), nullable=False)
     preferencias_ui = Column(JSON, nullable=False, server_default='{}')
     is_active = Column(Boolean, default=True, nullable=False)
+    
+    # 🔥 NUEVOS CAMPOS PARA RECUPERACIÓN DE CONTRASEÑA
+    reset_code = Column(String(6), nullable=True)
+    reset_code_expires_at = Column(DateTime(timezone=True), nullable=True)
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
     deleted_at = Column(DateTime(timezone=True))

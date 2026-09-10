@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+import random
 
 from app.core.config import settings
 from app.core.database import get_db
@@ -15,7 +15,7 @@ from app.core.security import (
 )
 from app.models import Usuario, Rol
 from app.modules.auth import schemas, services
-from app.modules.auth.crud import get_usuario_by_email, get_usuario_by_id, update_password
+from app.modules.auth.crud import get_usuario_by_email, update_password
 
 limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -24,11 +24,9 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # ============================================================
 # LOGIN
 # ============================================================
-
 @router.post("/login", response_model=schemas.TokenResponse)
 @limiter.limit("5/minute")
 def login(request: Request, credentials: schemas.LoginRequest, db: Session = Depends(get_db)):
-    """Autentica al usuario y retorna un token JWT"""
     usuario = get_usuario_by_email(db, credentials.email)
     if not usuario or not usuario.is_active or not verify_password(credentials.password, usuario.password_hash):
         raise HTTPException(
@@ -57,35 +55,19 @@ def login(request: Request, credentials: schemas.LoginRequest, db: Session = Dep
 # ============================================================
 # REGISTRO
 # ============================================================
-
 @router.post("/register", response_model=schemas.UserInfoResponse, status_code=status.HTTP_201_CREATED)
-def register(
-    data: schemas.RegisterRequest,
-    db: Session = Depends(get_db)
-):
-    """
-    Registra un nuevo usuario en el sistema.
-    """
-    # Verificar si el email ya existe
+def register(data: schemas.RegisterRequest, db: Session = Depends(get_db)):
     existing = db.query(Usuario).filter(Usuario.email == data.email).first()
     if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="El email ya está registrado"
-        )
-    
-    # Verificar documento único
+        raise HTTPException(status_code=400, detail="El email ya está registrado")
+
     if data.documento_identidad:
         existing_doc = db.query(Usuario).filter(
             Usuario.documento_identidad == data.documento_identidad
         ).first()
         if existing_doc:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="El documento ya está registrado"
-            )
-    
-    # Crear usuario
+            raise HTTPException(status_code=400, detail="El documento ya está registrado")
+
     new_user = Usuario(
         nombre=data.nombre,
         apellido=data.apellido,
@@ -96,21 +78,19 @@ def register(
         telefono=data.telefono,
         rol_id=data.rol_id if data.rol_id else 4
     )
-    
+
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    
-    # Obtener nombre del rol
+
     rol = db.query(Rol).filter(Rol.id == new_user.rol_id).first()
-    
+
     return schemas.UserInfoResponse(
         id=new_user.id,
         nombre=new_user.nombre,
         apellido=new_user.apellido,
         email=new_user.email,
         rol_id=new_user.rol_id,
-        rol_nombre=rol.nombre if rol else None,
         tipo_documento=new_user.tipo_documento,
         documento_identidad=new_user.documento_identidad,
         telefono=new_user.telefono,
@@ -119,19 +99,16 @@ def register(
 
 
 # ============================================================
-# OBTENER USUARIO ACTUAL
+# USUARIO ACTUAL
 # ============================================================
-
 @router.get("/me", response_model=schemas.UsuarioMe)
 def obtener_usuario_actual(current_user: Usuario = Depends(get_current_user)):
-    """Retorna la información del usuario autenticado"""
     return current_user
 
 
 # ============================================================
-# CAMBIAR CONTRASEÑA
+# CAMBIAR CONTRASEÑA (autenticado)
 # ============================================================
-
 @router.post("/cambiar-password")
 @limiter.limit("5/minute")
 def cambiar_password(
@@ -140,7 +117,6 @@ def cambiar_password(
     db: Session = Depends(get_db),
     current_user: Usuario = Depends(get_current_user)
 ):
-    """Permite al usuario autenticado cambiar su contraseña"""
     if not verify_password(datos.old_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="La contraseña actual no es correcta")
 
@@ -150,43 +126,85 @@ def cambiar_password(
 
 
 # ============================================================
-# RECUPERAR CONTRASEÑA
+# PASO 1: SOLICITAR CÓDIGO DE 6 DÍGITOS
 # ============================================================
-
-@router.post("/recuperar-password")
+@router.post("/recuperar-password", response_model=schemas.PasswordResetRequestResponse)
 @limiter.limit("3/minute")
 def solicitar_recuperacion(
     request: Request,
     datos: schemas.PasswordResetRequest,
     db: Session = Depends(get_db)
 ):
-    """Solicita un enlace de recuperación de contraseña"""
+    """
+    Solicita un código de 6 dígitos para recuperar contraseña.
+    En DEBUG, el código se devuelve en la respuesta.
+    En producción, se envía por email.
+    """
     usuario = get_usuario_by_email(db, datos.email)
+
     if usuario and usuario.is_active:
-        expire = datetime.utcnow() + timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
-        token = jwt.encode(
-            {
-                "sub": str(usuario.id),
-                "type": "password_reset",
-                "iat": datetime.utcnow(),
-                "exp": expire,
-            },
-            settings.SECRET_KEY,
-            algorithm=settings.ALGORITHM
-        )
-        reset_link = f"{settings.FRONTEND_URL}/restablecer-password?token={token}"
+        reset_code = str(random.randint(100000, 999999))
+        expires_at = datetime.utcnow() + timedelta(minutes=15)
+
+        usuario.reset_code = reset_code
+        usuario.reset_code_expires_at = expires_at
+        db.commit()
+
+        # Log en consola del backend
+        print("\n" + "=" * 60)
+        print("📧 CÓDIGO DE RECUPERACIÓN GENERADO")
+        print(f"   Email:  {usuario.email}")
+        print(f"   Código: {reset_code}")
+        print(f"   Expira: {expires_at} UTC")
+        print("=" * 60 + "\n")
+
+        # Enviar por email si el servicio está disponible
         try:
-            services.send_password_reset_email(usuario.email, reset_link)
-        except Exception:
-            raise HTTPException(status_code=500, detail="Error al enviar el correo")
+            services.send_password_reset_code(usuario.email, reset_code)
+        except Exception as e:
+            print(f"⚠️  Email no enviado: {e}")
 
-    return {"mensaje": "Si el correo existe, se ha enviado un enlace de recuperación"}
+        # ⚠️ En DEBUG devolvemos el código para poder probarlo
+        if settings.DEBUG:
+            return schemas.PasswordResetRequestResponse(
+                mensaje="Código generado (modo DEBUG)",
+                codigo=reset_code,
+                expira_en_minutos=15
+            )
+
+    # Respuesta genérica (no revelar si el email existe)
+    return schemas.PasswordResetRequestResponse(
+        mensaje="Si el correo existe, se ha enviado un código de recuperación"
+    )
 
 
 # ============================================================
-# RESTABLECER CONTRASEÑA
+# PASO 2: VERIFICAR CÓDIGO
 # ============================================================
+@router.post("/verificar-codigo")
+@limiter.limit("5/minute")
+def verificar_codigo(
+    request: Request,
+    datos: schemas.VerifyCodeRequest,
+    db: Session = Depends(get_db)
+):
+    usuario = get_usuario_by_email(db, datos.email)
 
+    if not usuario:
+        raise HTTPException(status_code=400, detail="Código inválido")
+
+    if usuario.reset_code != datos.code:
+        raise HTTPException(status_code=400, detail="Código incorrecto")
+
+    if not usuario.reset_code_expires_at or usuario.reset_code_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Código expirado")
+
+    return {"mensaje": "Código válido", "valido": True}
+
+
+# ============================================================
+# PASO 3: RESTABLECER CONTRASEÑA
+# ============================================================
 @router.post("/restablecer-password")
 @limiter.limit("5/minute")
 def confirmar_recuperacion(
@@ -194,23 +212,23 @@ def confirmar_recuperacion(
     datos: schemas.PasswordResetConfirm,
     db: Session = Depends(get_db)
 ):
-    """Restablece la contraseña usando un token de recuperación válido"""
-    try:
-        payload = jwt.decode(
-            datos.token,
-            settings.SECRET_KEY,
-            algorithms=[settings.ALGORITHM]
-        )
-        if payload.get("type") != "password_reset":
-            raise JWTError("Token no es de recuperación")
-        usuario_id = int(payload.get("sub"))
-    except (JWTError, ValueError):
-        raise HTTPException(status_code=400, detail="Token inválido o expirado")
+    usuario = get_usuario_by_email(db, datos.email)
 
-    usuario = get_usuario_by_id(db, usuario_id)
-    if not usuario or not usuario.is_active:
-        raise HTTPException(status_code=400, detail="Usuario no encontrado o inactivo")
+    if not usuario:
+        raise HTTPException(status_code=400, detail="Usuario no encontrado")
+
+    if usuario.reset_code != datos.code:
+        raise HTTPException(status_code=400, detail="Código incorrecto")
+
+    if not usuario.reset_code_expires_at or usuario.reset_code_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Código expirado")
 
     new_hash = get_password_hash(datos.new_password)
-    update_password(db, usuario, new_hash)
+    usuario.password_hash = new_hash
+    usuario.reset_code = None
+    usuario.reset_code_expires_at = None
+    db.commit()
+
+    print(f"\n CONTRASEÑA RESTABLECIDA PARA: {usuario.email}\n")
+
     return {"mensaje": "Contraseña restablecida correctamente"}

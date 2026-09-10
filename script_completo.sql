@@ -1,5 +1,5 @@
 -- ============================================================
--- SCRIPT COMPLETO - SIPA (Corregido)
+-- SCRIPT COMPLETO - SIPA (Corregido + Seeds + Verificación)
 -- ============================================================
 
 DROP SCHEMA IF EXISTS etapa_productiva CASCADE;
@@ -64,6 +64,10 @@ CREATE TABLE usuarios (
     CONSTRAINT fk_usuarios_rol FOREIGN KEY (rol_id) REFERENCES roles(id) ON DELETE RESTRICT,
     CONSTRAINT ck_usuarios_email CHECK (email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
 );
+
+-- Columnas necesarias para recuperación de contraseña
+ALTER TABLE usuarios ADD COLUMN reset_code VARCHAR(6);
+ALTER TABLE usuarios ADD COLUMN reset_code_expires_at TIMESTAMPTZ;
 
 CREATE TABLE usuario_roles (
     id BIGSERIAL PRIMARY KEY,
@@ -464,8 +468,10 @@ COMMENT ON COLUMN reuniones_seguimiento.archivo_f023_url IS 'URL directa al docu
 COMMENT ON COLUMN bitacoras.archivo_f147_url IS 'URL directa al documento del Formato F147 (bitácora).';
 
 -- ============================================================
--- DATOS SEMILLA (Seed)
+-- 13. DATOS SEMILLA (SEED)
 -- ============================================================
+
+-- 🔹 Roles
 INSERT INTO roles (nombre, descripcion) VALUES
 ('Administrador', 'Acceso total al sistema'),
 ('Coordinador', 'Gestiona fichas, charlas y asignaciones'),
@@ -475,6 +481,7 @@ INSERT INTO roles (nombre, descripcion) VALUES
 ('Consulta', 'Acceso de solo lectura')
 ON CONFLICT (nombre) DO NOTHING;
 
+-- 🔹 Modalidades
 INSERT INTO modalidades_ep (nombre) VALUES
 ('Monitoria'),
 ('Vínculo laboral'),
@@ -483,3 +490,33 @@ INSERT INTO modalidades_ep (nombre) VALUES
 ('Proyecto productivo'),
 ('Economía popular')
 ON CONFLICT (nombre) DO NOTHING;
+
+-- ============================================================
+-- 🔥 USUARIOS DE PRUEBA
+-- Contraseña para TODOS: Test1234
+-- Hash bcrypt real: $2b$12$29YhmtZimHMsmWtc8oWtJeFgik/258Txyc8v6xytmSYXIC4Tudx0i
+-- ============================================================
+INSERT INTO usuarios (nombre, apellido, email, password_hash, rol_id, is_active)
+VALUES
+    ('Admin',       'Sistema',  'usuario1@test.com', '$2b$12$29YhmtZimHMsmWtc8oWtJeFgik/258Txyc8v6xytmSYXIC4Tudx0i', 1, TRUE),
+    ('Carlos',      'Ramírez',  'usuario2@test.com', '$2b$12$29YhmtZimHMsmWtc8oWtJeFgik/258Txyc8v6xytmSYXIC4Tudx0i', 3, TRUE),
+    ('Pedro',       'Gómez',    'usuario3@test.com', '$2b$12$29YhmtZimHMsmWtc8oWtJeFgik/258Txyc8v6xytmSYXIC4Tudx0i', 4, TRUE),
+    ('Laura',       'Martínez', 'usuario4@test.com', '$2b$12$29YhmtZimHMsmWtc8oWtJeFgik/258Txyc8v6xytmSYXIC4Tudx0i', 2, TRUE),
+    ('Andrés',      'Pérez',    'usuario5@test.com', '$2b$12$29YhmtZimHMsmWtc8oWtJeFgik/258Txyc8v6xytmSYXIC4Tudx0i', 6, TRUE)
+ON CONFLICT (email) DO NOTHING;
+
+-- ============================================================
+-- 14. VERIFICACIÓN FINAL (te muestra lo que quedó)
+-- ============================================================
+SELECT 'Roles insertados' AS check_name, COUNT(*)::TEXT AS resultado FROM roles
+UNION ALL
+SELECT 'Modalidades insertadas', COUNT(*)::TEXT FROM modalidades_ep
+UNION ALL
+SELECT 'Usuarios insertados', COUNT(*)::TEXT FROM usuarios;
+
+-- Detalle de usuarios con su rol
+SELECT u.id, u.email, r.nombre AS rol, u.is_active,
+       LEFT(u.password_hash, 30) || '...' AS hash_inicio
+FROM usuarios u
+JOIN roles r ON r.id = u.rol_id
+ORDER BY u.id;

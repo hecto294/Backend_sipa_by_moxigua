@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional
 
 # ============================================================
@@ -30,7 +30,7 @@ class UserInfoResponse(BaseModel):
     documento_identidad: Optional[str] = None
     telefono: Optional[str] = None
     is_active: bool
-    
+
     class Config:
         from_attributes = True
 
@@ -50,15 +50,6 @@ class PasswordChange(BaseModel):
     old_password: str
     new_password: str = Field(..., min_length=6)
 
-class PasswordResetRequest(BaseModel):
-    """Solicitud de recuperación de contraseña"""
-    email: EmailStr
-
-class PasswordResetConfirm(BaseModel):
-    """Confirmación de recuperación de contraseña"""
-    token: str
-    new_password: str = Field(..., min_length=6)
-
 class UsuarioMe(BaseModel):
     """Información del usuario para el endpoint /me"""
     id: int
@@ -67,6 +58,50 @@ class UsuarioMe(BaseModel):
     email: str
     rol_id: int
     is_active: bool
-    
+
     class Config:
         from_attributes = True
+
+
+# ============================================================
+# ESQUEMAS DE RECUPERACIÓN DE CONTRASEÑA (CON CÓDIGO DE 6 DÍGITOS)
+# ============================================================
+
+class PasswordResetRequest(BaseModel):
+    """Solicitud de recuperación - Solo email"""
+    email: EmailStr
+
+
+class PasswordResetRequestResponse(BaseModel):
+    """🔥 NUEVO - Respuesta del paso 1.
+    En modo DEBUG incluye el código para pruebas."""
+    mensaje: str
+    codigo: Optional[str] = None
+    expira_en_minutos: Optional[int] = None
+
+
+class VerifyCodeRequest(BaseModel):
+    """Verificación de código de 6 dígitos"""
+    email: EmailStr
+    code: str = Field(..., min_length=6, max_length=6)
+
+    @field_validator("code")
+    @classmethod
+    def code_solo_digitos(cls, v: str) -> str:
+        if not v.isdigit():
+            raise ValueError("El código debe contener solo dígitos")
+        return v
+
+
+class PasswordResetConfirm(BaseModel):
+    """Confirmación con código de 6 dígitos"""
+    email: EmailStr
+    code: str = Field(..., min_length=6, max_length=6)
+    new_password: str = Field(..., min_length=8)
+
+    @field_validator("code")
+    @classmethod
+    def code_solo_digitos(cls, v: str) -> str:
+        if not v.isdigit():
+            raise ValueError("El código debe contener solo dígitos")
+        return v
